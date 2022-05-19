@@ -23,11 +23,11 @@
 package main
 
 import (
-	"os"
-
 	"go.etcd.io/etcd/server/v3/etcdmain"
+	"os"
 )
 
 func main() {
+	//主入口,传入命令行参数
 	etcdmain.Main(os.Args)
 }

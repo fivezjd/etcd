@@ -23,11 +23,13 @@ import (
 )
 
 func Main(args []string) {
+	//检测支持的架构 amd64 arm64 ...
 	checkSupportArch()
 
 	if len(args) > 1 {
 		cmd := args[1]
 		switch cmd {
+		//匹配第一个参数是gateway或者grpc-proxy
 		case "gateway", "grpc-proxy":
 			if err := rootCmd.Execute(); err != nil {
 				fmt.Fprint(os.Stderr, err)
