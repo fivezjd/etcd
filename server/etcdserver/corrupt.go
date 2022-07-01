@@ -27,42 +27,75 @@ import (
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/types"
-	"go.etcd.io/etcd/pkg/v3/traceutil"
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
 
 	"go.uber.org/zap"
 )
 
-// CheckInitialHashKV compares initial hash values with its peers
+type corruptionMonitor struct {
+	lg *zap.Logger
+
+	hasher Hasher
+}
+
+type Hasher interface {
+	mvcc.HashStorage
+	ReqTimeout() time.Duration
+	MemberId() types.ID
+	PeerHashByRev(int64) []*peerHashKVResp
+	LinearizableReadNotify(context.Context) error
+	TriggerCorruptAlarm(uint64)
+}
+
+func NewCorruptionMonitor(lg *zap.Logger, s *EtcdServer) *corruptionMonitor {
+	return &corruptionMonitor{
+		lg:     lg,
+		hasher: hasherAdapter{s, s.KV().HashStorage()},
+	}
+}
+
+type hasherAdapter struct {
+	*EtcdServer
+	mvcc.HashStorage
+}
+
+func (h hasherAdapter) ReqTimeout() time.Duration {
+	return h.EtcdServer.Cfg.ReqTimeout()
+}
+
+func (h hasherAdapter) PeerHashByRev(rev int64) []*peerHashKVResp {
+	return h.EtcdServer.getPeerHashKVs(rev)
+}
+
+func (h hasherAdapter) TriggerCorruptAlarm(memberID uint64) {
+	h.EtcdServer.triggerCorruptAlarm(memberID)
+}
+
+// InitialCheck compares initial hash values with its peers
 // before serving any peer/client traffic. Only mismatch when hashes
 // are different at requested revision, with same compact revision.
-func (s *EtcdServer) CheckInitialHashKV() error {
-	if !s.Cfg.InitialCorruptCheck {
-		return nil
-	}
+func (cm *corruptionMonitor) InitialCheck() error {
 
-	lg := s.Logger()
-
-	lg.Info(
+	cm.lg.Info(
 		"starting initial corruption check",
-		zap.String("local-member-id", s.ID().String()),
-		zap.Duration("timeout", s.Cfg.ReqTimeout()),
+		zap.String("local-member-id", cm.hasher.MemberId().String()),
+		zap.Duration("timeout", cm.hasher.ReqTimeout()),
 	)
 
-	h, rev, crev, err := s.kv.HashByRev(0)
+	h, rev, err := cm.hasher.HashByRev(0)
 	if err != nil {
-		return fmt.Errorf("%s failed to fetch hash (%v)", s.ID(), err)
+		return fmt.Errorf("%s failed to fetch hash (%v)", cm.hasher.MemberId(), err)
 	}
-	peers := s.getPeerHashKVs(rev)
+	peers := cm.hasher.PeerHashByRev(rev)
 	mismatch := 0
 	for _, p := range peers {
 		if p.resp != nil {
 			peerID := types.ID(p.resp.Header.MemberId)
 			fields := []zap.Field{
-				zap.String("local-member-id", s.ID().String()),
+				zap.String("local-member-id", cm.hasher.MemberId().String()),
 				zap.Int64("local-member-revision", rev),
-				zap.Int64("local-member-compact-revision", crev),
-				zap.Uint32("local-member-hash", h),
+				zap.Int64("local-member-compact-revision", h.CompactRevision),
+				zap.Uint32("local-member-hash", h.Hash),
 				zap.String("remote-peer-id", peerID.String()),
 				zap.Strings("remote-peer-endpoints", p.eps),
 				zap.Int64("remote-peer-revision", p.resp.Header.Revision),
@@ -70,12 +103,12 @@ func (s *EtcdServer) CheckInitialHashKV() error {
 				zap.Uint32("remote-peer-hash", p.resp.Hash),
 			}
 
-			if h != p.resp.Hash {
-				if crev == p.resp.CompactRevision {
-					lg.Warn("found different hash values from remote peer", fields...)
+			if h.Hash != p.resp.Hash {
+				if h.CompactRevision == p.resp.CompactRevision {
+					cm.lg.Warn("found different hash values from remote peer", fields...)
 					mismatch++
 				} else {
-					lg.Warn("found different compact revision values from remote peer", fields...)
+					cm.lg.Warn("found different compact revision values from remote peer", fields...)
 				}
 			}
 
@@ -85,23 +118,23 @@ func (s *EtcdServer) CheckInitialHashKV() error {
 		if p.err != nil {
 			switch p.err {
 			case rpctypes.ErrFutureRev:
-				lg.Warn(
+				cm.lg.Warn(
 					"cannot fetch hash from slow remote peer",
-					zap.String("local-member-id", s.ID().String()),
+					zap.String("local-member-id", cm.hasher.MemberId().String()),
 					zap.Int64("local-member-revision", rev),
-					zap.Int64("local-member-compact-revision", crev),
-					zap.Uint32("local-member-hash", h),
+					zap.Int64("local-member-compact-revision", h.CompactRevision),
+					zap.Uint32("local-member-hash", h.Hash),
 					zap.String("remote-peer-id", p.id.String()),
 					zap.Strings("remote-peer-endpoints", p.eps),
 					zap.Error(err),
 				)
 			case rpctypes.ErrCompacted:
-				lg.Warn(
+				cm.lg.Warn(
 					"cannot fetch hash from remote peer; local member is behind",
-					zap.String("local-member-id", s.ID().String()),
+					zap.String("local-member-id", cm.hasher.MemberId().String()),
 					zap.Int64("local-member-revision", rev),
-					zap.Int64("local-member-compact-revision", crev),
-					zap.Uint32("local-member-hash", h),
+					zap.Int64("local-member-compact-revision", h.CompactRevision),
+					zap.Uint32("local-member-hash", h.Hash),
 					zap.String("remote-peer-id", p.id.String()),
 					zap.Strings("remote-peer-endpoints", p.eps),
 					zap.Error(err),
@@ -110,61 +143,31 @@ func (s *EtcdServer) CheckInitialHashKV() error {
 		}
 	}
 	if mismatch > 0 {
-		return fmt.Errorf("%s found data inconsistency with peers", s.ID())
+		return fmt.Errorf("%s found data inconsistency with peers", cm.hasher.MemberId())
 	}
 
-	lg.Info(
+	cm.lg.Info(
 		"initial corruption checking passed; no corruption",
-		zap.String("local-member-id", s.ID().String()),
+		zap.String("local-member-id", cm.hasher.MemberId().String()),
 	)
 	return nil
 }
 
-func (s *EtcdServer) monitorKVHash() {
-	t := s.Cfg.CorruptCheckTime
-	if t == 0 {
-		return
-	}
-
-	lg := s.Logger()
-	lg.Info(
-		"enabled corruption checking",
-		zap.String("local-member-id", s.ID().String()),
-		zap.Duration("interval", t),
-	)
-
-	for {
-		select {
-		case <-s.stopping:
-			return
-		case <-time.After(t):
-		}
-		if !s.isLeader() {
-			continue
-		}
-		if err := s.checkHashKV(); err != nil {
-			lg.Warn("failed to check hash KV", zap.Error(err))
-		}
-	}
-}
-
-func (s *EtcdServer) checkHashKV() error {
-	lg := s.Logger()
-
-	h, rev, crev, err := s.kv.HashByRev(0)
+func (cm *corruptionMonitor) periodicCheck() error {
+	h, rev, err := cm.hasher.HashByRev(0)
 	if err != nil {
 		return err
 	}
-	peers := s.getPeerHashKVs(rev)
+	peers := cm.hasher.PeerHashByRev(rev)
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.Cfg.ReqTimeout())
-	err = s.linearizableReadNotify(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), cm.hasher.ReqTimeout())
+	err = cm.hasher.LinearizableReadNotify(ctx)
 	cancel()
 	if err != nil {
 		return err
 	}
 
-	h2, rev2, crev2, err := s.kv.HashByRev(0)
+	h2, rev2, err := cm.hasher.HashByRev(0)
 	if err != nil {
 		return err
 	}
@@ -175,27 +178,20 @@ func (s *EtcdServer) checkHashKV() error {
 			return
 		}
 		alarmed = true
-		a := &pb.AlarmRequest{
-			MemberID: id,
-			Action:   pb.AlarmRequest_ACTIVATE,
-			Alarm:    pb.AlarmType_CORRUPT,
-		}
-		s.GoAttach(func() {
-			s.raftRequest(s.ctx, pb.InternalRaftRequest{Alarm: a})
-		})
+		cm.hasher.TriggerCorruptAlarm(id)
 	}
 
-	if h2 != h && rev2 == rev && crev == crev2 {
-		lg.Warn(
+	if h2.Hash != h.Hash && rev2 == rev && h.CompactRevision == h2.CompactRevision {
+		cm.lg.Warn(
 			"found hash mismatch",
 			zap.Int64("revision-1", rev),
-			zap.Int64("compact-revision-1", crev),
-			zap.Uint32("hash-1", h),
+			zap.Int64("compact-revision-1", h.CompactRevision),
+			zap.Uint32("hash-1", h.Hash),
 			zap.Int64("revision-2", rev2),
-			zap.Int64("compact-revision-2", crev2),
-			zap.Uint32("hash-2", h2),
+			zap.Int64("compact-revision-2", h2.CompactRevision),
+			zap.Uint32("hash-2", h2.Hash),
 		)
-		mismatch(uint64(s.ID()))
+		mismatch(uint64(cm.hasher.MemberId()))
 	}
 
 	checkedCount := 0
@@ -208,7 +204,7 @@ func (s *EtcdServer) checkHashKV() error {
 
 		// leader expects follower's latest revision less than or equal to leader's
 		if p.resp.Header.Revision > rev2 {
-			lg.Warn(
+			cm.lg.Warn(
 				"revision from follower must be less than or equal to leader's",
 				zap.Int64("leader-revision", rev2),
 				zap.Int64("follower-revision", p.resp.Header.Revision),
@@ -218,10 +214,10 @@ func (s *EtcdServer) checkHashKV() error {
 		}
 
 		// leader expects follower's latest compact revision less than or equal to leader's
-		if p.resp.CompactRevision > crev2 {
-			lg.Warn(
+		if p.resp.CompactRevision > h2.CompactRevision {
+			cm.lg.Warn(
 				"compact revision from follower must be less than or equal to leader's",
-				zap.Int64("leader-compact-revision", crev2),
+				zap.Int64("leader-compact-revision", h2.CompactRevision),
 				zap.Int64("follower-compact-revision", p.resp.CompactRevision),
 				zap.String("follower-peer-id", types.ID(id).String()),
 			)
@@ -229,11 +225,11 @@ func (s *EtcdServer) checkHashKV() error {
 		}
 
 		// follower's compact revision is leader's old one, then hashes must match
-		if p.resp.CompactRevision == crev && p.resp.Hash != h {
-			lg.Warn(
+		if p.resp.CompactRevision == h.CompactRevision && p.resp.Hash != h.Hash {
+			cm.lg.Warn(
 				"same compact revision then hashes must match",
-				zap.Int64("leader-compact-revision", crev2),
-				zap.Uint32("leader-hash", h),
+				zap.Int64("leader-compact-revision", h2.CompactRevision),
+				zap.Uint32("leader-hash", h.Hash),
 				zap.Int64("follower-compact-revision", p.resp.CompactRevision),
 				zap.Uint32("follower-hash", p.resp.Hash),
 				zap.String("follower-peer-id", types.ID(id).String()),
@@ -241,8 +237,19 @@ func (s *EtcdServer) checkHashKV() error {
 			mismatch(id)
 		}
 	}
-	lg.Info("finished peer corruption check", zap.Int("number-of-peers-checked", checkedCount))
+	cm.lg.Info("finished peer corruption check", zap.Int("number-of-peers-checked", checkedCount))
 	return nil
+}
+
+func (s *EtcdServer) triggerCorruptAlarm(id uint64) {
+	a := &pb.AlarmRequest{
+		MemberID: id,
+		Action:   pb.AlarmRequest_ACTIVATE,
+		Alarm:    pb.AlarmType_CORRUPT,
+	}
+	s.GoAttach(func() {
+		s.raftRequest(s.ctx, pb.InternalRaftRequest{Alarm: a})
+	})
 }
 
 type peerInfo struct {
@@ -262,7 +269,7 @@ func (s *EtcdServer) getPeerHashKVs(rev int64) []*peerHashKVResp {
 	members := s.cluster.Members()
 	peers := make([]peerInfo, 0, len(members))
 	for _, m := range members {
-		if m.ID == s.ID() {
+		if m.ID == s.MemberId() {
 			continue
 		}
 		peers = append(peers, peerInfo{id: m.ID, eps: m.PeerURLs})
@@ -270,6 +277,7 @@ func (s *EtcdServer) getPeerHashKVs(rev int64) []*peerHashKVResp {
 
 	lg := s.Logger()
 
+	cc := &http.Client{Transport: s.peerRt}
 	var resps []*peerHashKVResp
 	for _, p := range peers {
 		if len(p.eps) == 0 {
@@ -280,7 +288,7 @@ func (s *EtcdServer) getPeerHashKVs(rev int64) []*peerHashKVResp {
 		var lastErr error
 		for _, ep := range p.eps {
 			ctx, cancel := context.WithTimeout(context.Background(), s.Cfg.ReqTimeout())
-			resp, lastErr := s.getPeerHashKVHTTP(ctx, ep, rev)
+			resp, lastErr := HashByRev(ctx, cc, ep, rev)
 			cancel()
 			if lastErr == nil {
 				resps = append(resps, &peerHashKVResp{peerInfo: p, resp: resp, err: nil})
@@ -288,7 +296,7 @@ func (s *EtcdServer) getPeerHashKVs(rev int64) []*peerHashKVResp {
 			}
 			lg.Warn(
 				"failed hash kv request",
-				zap.String("local-member-id", s.ID().String()),
+				zap.String("local-member-id", s.MemberId().String()),
 				zap.Int64("requested-revision", rev),
 				zap.String("remote-peer-endpoint", ep),
 				zap.Error(lastErr),
@@ -301,40 +309,6 @@ func (s *EtcdServer) getPeerHashKVs(rev int64) []*peerHashKVResp {
 		}
 	}
 	return resps
-}
-
-type applierV3Corrupt struct {
-	applierV3
-}
-
-func newApplierV3Corrupt(a applierV3) *applierV3Corrupt { return &applierV3Corrupt{a} }
-
-func (a *applierV3Corrupt) Put(ctx context.Context, txn mvcc.TxnWrite, p *pb.PutRequest) (*pb.PutResponse, *traceutil.Trace, error) {
-	return nil, nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) Range(ctx context.Context, txn mvcc.TxnRead, p *pb.RangeRequest) (*pb.RangeResponse, error) {
-	return nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) DeleteRange(txn mvcc.TxnWrite, p *pb.DeleteRangeRequest) (*pb.DeleteRangeResponse, error) {
-	return nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) Txn(ctx context.Context, rt *pb.TxnRequest) (*pb.TxnResponse, *traceutil.Trace, error) {
-	return nil, nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) Compaction(compaction *pb.CompactionRequest) (*pb.CompactionResponse, <-chan struct{}, *traceutil.Trace, error) {
-	return nil, nil, nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) LeaseGrant(lc *pb.LeaseGrantRequest) (*pb.LeaseGrantResponse, error) {
-	return nil, ErrCorrupt
-}
-
-func (a *applierV3Corrupt) LeaseRevoke(lc *pb.LeaseRevokeRequest) (*pb.LeaseRevokeResponse, error) {
-	return nil, ErrCorrupt
 }
 
 const PeerHashKVPath = "/members/hashkv"
@@ -372,7 +346,7 @@ func (h *hashKVHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "error unmarshalling request", http.StatusBadRequest)
 		return
 	}
-	hash, rev, compactRev, err := h.server.KV().HashByRev(req.Revision)
+	hash, rev, err := h.server.KV().HashStorage().HashByRev(req.Revision)
 	if err != nil {
 		h.lg.Warn(
 			"failed to get hashKV",
@@ -382,7 +356,7 @@ func (h *hashKVHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp := &pb.HashKVResponse{Header: &pb.ResponseHeader{Revision: rev}, Hash: hash, CompactRevision: compactRev}
+	resp := &pb.HashKVResponse{Header: &pb.ResponseHeader{Revision: rev}, Hash: hash.Hash, CompactRevision: hash.CompactRevision}
 	respBytes, err := json.Marshal(resp)
 	if err != nil {
 		h.lg.Warn("failed to marshal hashKV response", zap.Error(err))
@@ -395,9 +369,8 @@ func (h *hashKVHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(respBytes)
 }
 
-// getPeerHashKVHTTP fetch hash of kv store at the given rev via http call to the given url
-func (s *EtcdServer) getPeerHashKVHTTP(ctx context.Context, url string, rev int64) (*pb.HashKVResponse, error) {
-	cc := &http.Client{Transport: s.peerRt}
+// HashByRev fetch hash of kv store at the given rev via http call to the given url
+func HashByRev(ctx context.Context, cc *http.Client, url string, rev int64) (*pb.HashKVResponse, error) {
 	hashReq := &pb.HashKVRequest{Revision: rev}
 	hashReqBytes, err := json.Marshal(hashReq)
 	if err != nil {

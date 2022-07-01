@@ -12,6 +12,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 
 - `etcd` will no longer start on data dir created by newer versions (for example etcd v3.6 will not run on v3.7+ data dir). To downgrade data dir please check out `etcdutl migrate` command.
 - `etcd` doesn't support serving client requests on the peer listen endpoints (--listen-peer-urls). See [pull/13565](https://github.com/etcd-io/etcd/pull/13565).
+- `etcdctl` will sleep(2s) in case of range delete without `--range` flag.See [pull/13747](https://github.com/etcd-io/etcd/pull/13747)
 
 ### Deprecations
 
@@ -33,6 +34,9 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 
 - Add command to generate [shell completion](https://github.com/etcd-io/etcd/pull/13142).
 - Add `migrate` command for downgrading/upgrading etcd data dir files.
+
+### Package `clientv3`
+- Fix [do not overwrite authTokenBundle on dial](https://github.com/etcd-io/etcd/pull/12992).
 
 ### Package `server`
 
@@ -67,6 +71,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Fix [consistent_index coming from snapshot is overwritten by the old local value](https://github.com/etcd-io/etcd/pull/13930)
 - Fix [etcd panic on startup (auth enabled)](https://github.com/etcd-io/etcd/pull/13942)
 - Fix [Defrag unsets backend options](https://github.com/etcd-io/etcd/pull/13679).
+- Fix [Restrict the max size of each WAL entry to the remaining size of the WAL file](https://github.com/etcd-io/etcd/pull/14122).
 
 ### tools/benchmark
 

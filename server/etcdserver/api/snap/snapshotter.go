@@ -94,7 +94,7 @@ func (s *Snapshotter) save(snapshot *raftpb.Snapshot) error {
 		s.lg.Warn("failed to write a snap file", zap.String("path", spath), zap.Error(err))
 		rerr := os.Remove(spath)
 		if rerr != nil {
-			s.lg.Warn("failed to remove a broken snap file", zap.String("path", spath), zap.Error(err))
+			s.lg.Warn("failed to remove a broken snap file", zap.String("path", spath), zap.Error(rerr))
 		}
 		return err
 	}
@@ -242,7 +242,7 @@ func checkSuffix(lg *zap.Logger, names []string) []string {
 			snaps = append(snaps, names[i])
 		} else {
 			// If we find a file which is not a snapshot then check if it's
-			// a vaild file. If not throw out a warning.
+			// a valid file. If not throw out a warning.
 			if _, ok := validFiles[names[i]]; !ok {
 				if lg != nil {
 					lg.Warn("found unexpected non-snap file; skipping", zap.String("path", names[i]))
