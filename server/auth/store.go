@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -398,7 +399,9 @@ func (as *authStore) selectPassword(password string, hashedPassword string) ([]b
 	return base64.StdEncoding.DecodeString(hashedPassword)
 }
 
+// 新增客户端用户
 func (as *authStore) UserAdd(r *pb.AuthUserAddRequest) (*pb.AuthUserAddResponse, error) {
+
 	if len(r.Name) == 0 {
 		return nil, ErrUserEmpty
 	}
@@ -836,14 +839,17 @@ func (as *authStore) RoleGrantPermission(r *pb.AuthRoleGrantPermissionRequest) (
 	return &pb.AuthRoleGrantPermissionResponse{}, nil
 }
 
+// 简单账号密码登录时这里会验证客户端账号密码
 func (as *authStore) isOpPermitted(userName string, revision uint64, key, rangeEnd []byte, permTyp authpb.Permission_Type) error {
 	// TODO(mitake): this function would be costly so we need a caching mechanism
+	// 未开启认证开关时，不会返回错误
 	if !as.IsAuthEnabled() {
 		return nil
 	}
 
 	// only gets rev == 0 when passed AuthInfo{}; no user given
 	if revision == 0 {
+		log.Println("850 store.go")
 		return ErrUserEmpty
 	}
 	rev := as.Revision()
@@ -878,6 +884,7 @@ func (as *authStore) isOpPermitted(userName string, revision uint64, key, rangeE
 	return ErrPermissionDenied
 }
 
+// put操作验证用户名和密码
 func (as *authStore) IsPutPermitted(authInfo *AuthInfo, key []byte) error {
 	return as.isOpPermitted(authInfo.Username, authInfo.Revision, key, nil, authpb.WRITE)
 }
@@ -895,6 +902,7 @@ func (as *authStore) IsAdminPermitted(authInfo *AuthInfo) error {
 		return nil
 	}
 	if authInfo == nil || authInfo.Username == "" {
+		log.Println("902 store.go")
 		return ErrUserEmpty
 	}
 
@@ -1051,6 +1059,7 @@ func (as *authStore) AuthInfoFromCtx(ctx context.Context) (*AuthInfo, error) {
 	}
 
 	token := ts[0]
+	// 验证用户token
 	authInfo, uok := as.authInfoFromToken(ctx, token)
 	if !uok {
 		as.lg.Warn("invalid auth token", zap.String("token", token))

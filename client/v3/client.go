@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// ddd
 package clientv3
 
 import (
@@ -26,14 +27,14 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	"go.etcd.io/etcd/client/v3/credentials"
-	"go.etcd.io/etcd/client/v3/internal/endpoint"
-	"go.etcd.io/etcd/client/v3/internal/resolver"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpccredentials "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
+	"zjd/v3/internal/endpoint"
+	"zjd/v3/internal/resolver"
 )
 
 var (
@@ -289,6 +290,7 @@ func (c *Client) dial(creds grpccredentials.TransportCredentials, dopts ...grpc.
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure dialer: %v", err)
 	}
+	// 查看token是否存在
 	if c.authTokenBundle != nil {
 		opts = append(opts, grpc.WithPerRPCCredentials(c.authTokenBundle.PerRPCCredentials()))
 	}
@@ -302,6 +304,7 @@ func (c *Client) dial(creds grpccredentials.TransportCredentials, dopts ...grpc.
 		defer cancel() // TODO: Is this right for cases where grpc.WithBlock() is not set on the dial options?
 	}
 	target := fmt.Sprintf("%s://%p/%s", resolver.Schema, c, authority(c.endpoints[0]))
+	// 建立RPC连接
 	conn, err := grpc.DialContext(dctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -415,6 +418,7 @@ func newClient(cfg *Config) (*Client, error) {
 
 	// Use a provided endpoint target so that for https:// without any tls config given, then
 	// grpc will assume the certificate server name is the endpoint host.
+	// 建立RPC连接
 	conn, err := client.dialWithBalancer()
 	if err != nil {
 		client.cancel()
@@ -424,11 +428,11 @@ func newClient(cfg *Config) (*Client, error) {
 	}
 	client.conn = conn
 
-	client.Cluster = NewCluster(client)
-	client.KV = NewKV(client)
-	client.Lease = NewLease(client)
-	client.Watcher = NewWatcher(client)
-	client.Auth = NewAuth(client)
+	client.Cluster = NewCluster(client) // 集群
+	client.KV = NewKV(client)           // 设置kv值
+	client.Lease = NewLease(client)     // 租约
+	client.Watcher = NewWatcher(client) // 监听
+	client.Auth = NewAuth(client)       // 客户端认证
 	client.Maintenance = NewMaintenance(client)
 
 	//get token with established connection

@@ -155,8 +155,9 @@ func (kv *kv) Do(ctx context.Context, op Op) (OpResponse, error) {
 		} else {
 			err = rpctypes.ErrInvalidSortOption
 		}
-	case tPut:
+	case tPut: // PUT操作
 		var resp *pb.PutResponse
+		// RPC调用执行PUT
 		r := &pb.PutRequest{Key: op.key, Value: op.val, Lease: int64(op.leaseID), PrevKv: op.prevKV, IgnoreValue: op.ignoreValue, IgnoreLease: op.ignoreLease}
 		resp, err = kv.remote.Put(ctx, r, kv.callOpts...)
 		if err == nil {

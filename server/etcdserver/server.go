@@ -357,6 +357,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
 	})
 
+	// 生成token提供者
 	tp, err := auth.NewTokenProvider(cfg.Logger, cfg.AuthToken,
 		func(index uint64) <-chan struct{} {
 			return srv.applyWait.Wait(index)
@@ -524,6 +525,7 @@ func (s *EtcdServer) adjustTicks() {
 // Start must be non-blocking; any long-running server functionality
 // should be implemented in goroutines.
 func (s *EtcdServer) Start() {
+	// server启动一系列函数
 	s.start()
 	s.GoAttach(func() { s.adjustTicks() })
 	s.GoAttach(func() { s.publishV3(s.Cfg.ReqTimeout()) })
@@ -542,6 +544,7 @@ func (s *EtcdServer) Start() {
 func (s *EtcdServer) start() {
 	lg := s.Logger()
 
+	// 没有配置快照数量的话，将快照数量配置为默认值 10万
 	if s.Cfg.SnapshotCount == 0 {
 		lg.Info(
 			"updating snapshot-count to default",
@@ -550,6 +553,7 @@ func (s *EtcdServer) start() {
 		)
 		s.Cfg.SnapshotCount = DefaultSnapshotCount
 	}
+	//
 	if s.Cfg.SnapshotCatchUpEntries == 0 {
 		lg.Info(
 			"updating snapshot catch-up entries to default",
@@ -559,6 +563,7 @@ func (s *EtcdServer) start() {
 		s.Cfg.SnapshotCatchUpEntries = DefaultSnapshotCatchUpEntries
 	}
 
+	// TODO
 	s.w = wait.New()
 	s.applyWait = wait.NewTimeList()
 	s.done = make(chan struct{})
@@ -588,6 +593,7 @@ func (s *EtcdServer) start() {
 
 	// TODO: if this is an empty log, writes all peer infos
 	// into the first entry
+	// 启动一个协程
 	go s.run()
 }
 
@@ -741,6 +747,7 @@ type raftReadyHandler struct {
 func (s *EtcdServer) run() {
 	lg := s.Logger()
 
+	// 获取 raft 存储
 	sn, err := s.r.raftStorage.Snapshot()
 	if err != nil {
 		lg.Panic("failed to get snapshot from Raft storage", zap.Error(err))
@@ -842,6 +849,7 @@ func (s *EtcdServer) run() {
 	for {
 		select {
 		case ap := <-s.r.apply():
+			// 执行请求 重要
 			f := func(context.Context) { s.applyAll(&ep, &ap) }
 			sched.Schedule(f)
 		case leases := <-expiredLeaseC:
@@ -909,7 +917,7 @@ func (s *EtcdServer) Cleanup() {
 }
 
 func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
-	s.applySnapshot(ep, apply)
+	s.applySnapshot(ep, apply) // 快照
 	s.applyEntries(ep, apply)
 
 	proposalsApplied.Set(float64(ep.appliedi))

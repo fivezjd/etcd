@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"errors"
+	"log"
 	"time"
 
 	jwt "github.com/golang-jwt/jwt"
@@ -46,6 +47,7 @@ func (t *tokenJWT) info(ctx context.Context, token string, rev uint64) (*AuthInf
 	)
 
 	parsed, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		log.Println("解析客户端token：", token)
 		if token.Method.Alg() != t.signMethod.Alg() {
 			return nil, errors.New("invalid signing method")
 		}
@@ -93,7 +95,9 @@ func (t *tokenJWT) assign(ctx context.Context, username string, revision uint64)
 			"exp":      time.Now().Add(t.ttl).Unix(),
 		})
 
+	// 生成token
 	token, err := tk.SignedString(t.key)
+	log.Println("生成token", token)
 	if err != nil {
 		t.lg.Debug(
 			"failed to sign a JWT token",

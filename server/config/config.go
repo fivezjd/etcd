@@ -48,7 +48,7 @@ type ServerConfig struct {
 	// rather than the dataDir/member/wal.
 	DedicatedWALDir string
 
-	SnapshotCount uint64
+	SnapshotCount uint64 // 快照数量
 
 	// SnapshotCatchUpEntries is the number of entries for a slow follower
 	// to catch-up after compacting the raft storage entries.

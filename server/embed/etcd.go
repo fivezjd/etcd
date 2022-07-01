@@ -91,12 +91,15 @@ type peerListener struct {
 // The returned Etcd.Server is not guaranteed to have joined the cluster. Wait
 // on the Etcd.Server.ReadyNotify() channel to know when it completes and is ready for use.
 func StartEtcd(inCfg *Config) (e *Etcd, err error) {
+	// 验证配置
 	if err = inCfg.Validate(); err != nil {
 		return nil, err
 	}
 	serving := false
+	// 初始化etcd对象
 	e = &Etcd{cfg: *inCfg, stopc: make(chan struct{})}
 	cfg := &e.cfg
+
 	defer func() {
 		if e == nil || err == nil {
 			return
@@ -104,13 +107,16 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		if !serving {
 			// errored before starting gRPC server for serveCtx.serversC
 			for _, sctx := range e.sctxs {
+				// 关闭客户端请求
 				close(sctx.serversC)
 			}
 		}
+		//关闭服务器
 		e.Close()
+		//etcd server 置为nil
 		e = nil
 	}()
-
+	//
 	if !cfg.SocketOpts.Empty() {
 		cfg.logger.Info(
 			"configuring socket options",
@@ -118,10 +124,12 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			zap.Bool("reuse-port", cfg.SocketOpts.ReusePort),
 		)
 	}
+	// etcd对象记录日志
 	e.cfg.logger.Info(
 		"configuring peer listeners",
 		zap.Strings("listen-peer-urls", e.cfg.getLPURLs()),
 	)
+	//服务端socket TODO
 	if e.Peers, err = configurePeerListeners(cfg); err != nil {
 		return e, err
 	}
@@ -130,6 +138,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		"configuring client listeners",
 		zap.Strings("listen-client-urls", e.cfg.getLCURLs()),
 	)
+	// 客户端socket TODO
 	if e.sctxs, err = configureClientListeners(cfg); err != nil {
 		return e, err
 	}
@@ -142,6 +151,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		urlsmap types.URLsMap
 		token   string
 	)
+	// TODO
 	memberInitialized := true
 	if !isMemberInitialized(cfg) {
 		memberInitialized = false
@@ -241,6 +251,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
 
+	// 构建Server
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
 		return e, err
 	}
@@ -261,6 +272,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			return e, err
 		}
 	}
+	// 启动server
 	e.Server.Start()
 
 	if err = e.servePeers(); err != nil {

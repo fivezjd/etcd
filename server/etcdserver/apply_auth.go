@@ -65,6 +65,7 @@ func (aa *authApplierV3) Apply(r *pb.InternalRaftRequest, shouldApplyV3 membersh
 }
 
 func (aa *authApplierV3) Put(ctx context.Context, txn mvcc.TxnWrite, r *pb.PutRequest) (*pb.PutResponse, *traceutil.Trace, error) {
+	// 权限验证
 	if err := aa.as.IsPutPermitted(&aa.authInfo, r.Key); err != nil {
 		return nil, nil, err
 	}

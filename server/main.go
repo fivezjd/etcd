@@ -28,6 +28,6 @@ import (
 )
 
 func main() {
-	//主入口,传入命令行参数
+	// 主入口,传入命令行参数
 	etcdmain.Main(os.Args)
 }

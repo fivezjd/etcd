@@ -43,10 +43,14 @@ var (
 func startEtcdOrProxyV2(args []string) {
 	grpc.EnableTracing = false
 
+	// 初始化配置对象
 	cfg := newConfig()
+	// cfg元素非常多，有日志、读写锁等等
 	defaultInitialCluster := cfg.ec.InitialCluster
 
+	// 解析命令行输入的参数
 	err := cfg.parse(args[1:])
+	// 使用zaplog 记录日志
 	lg := cfg.ec.GetLogger()
 	// If we failed to parse the whole configuration, print the error using
 	// preferably the resolved logger from the config,
@@ -60,21 +64,29 @@ func startEtcdOrProxyV2(args []string) {
 			os.Exit(1)
 		}
 	}
+	//记录启动日志
 	lg.Info("Running: ", zap.Strings("args", args))
+	//os.Exit(0)
+	//参数解析失败，参数格式不正确
 	if err != nil {
 		lg.Warn("failed to verify flags", zap.Error(err))
 		switch err {
 		case embed.ErrUnsetAdvertiseClientURLsFlag:
+			//--advertise-client-urls is required when --listen-client-urls is set explicitly
 			lg.Warn("advertise client URLs are not set", zap.Error(err))
 		}
 		os.Exit(1)
 	}
 
+	// 启动日志
+	// --判断debug
+	// --判断trace是否开启
 	cfg.ec.SetupGlobalLoggers()
 
 	defer func() {
 		logger := cfg.ec.GetLogger()
 		if logger != nil {
+			// 刷新日志buffer
 			logger.Sync()
 		}
 	}()
@@ -98,9 +110,11 @@ func startEtcdOrProxyV2(args []string) {
 		)
 	}
 
+	// 停止channel
 	var stopped <-chan struct{}
 	var errc <-chan error
 
+	//TODO 看看下面这个方法的具体意思
 	which := identifyDataDirOrDie(cfg.ec.GetLogger(), cfg.ec.Dir)
 	if which != dirEmpty {
 		lg.Info(
@@ -112,6 +126,7 @@ func startEtcdOrProxyV2(args []string) {
 		case dirMember:
 			stopped, errc, err = startEtcd(&cfg.ec)
 		case dirProxy:
+			// v2 http 不支持
 			lg.Panic("v2 http proxy has already been deprecated in 3.6", zap.String("dir-type", string(which)))
 		default:
 			lg.Panic(
@@ -120,12 +135,14 @@ func startEtcdOrProxyV2(args []string) {
 			)
 		}
 	} else {
+		//启动etcd 入口
 		stopped, errc, err = startEtcd(&cfg.ec)
 		if err != nil {
 			lg.Warn("failed to start etcd", zap.Error(err))
 		}
 	}
 
+	//启动错误的信息，这里比较重要 TODO
 	if err != nil {
 		if derr, ok := err.(*etcdserver.DiscoveryError); ok {
 			switch derr.Err {
@@ -186,7 +203,7 @@ func startEtcdOrProxyV2(args []string) {
 	// for accepting connections. The etcd instance should be
 	// joined with the cluster and ready to serve incoming
 	// connections.
-	notifySystemd(lg)
+	notifySystemd(lg) // 信号处理
 
 	select {
 	case lerr := <-errc:
@@ -200,10 +217,12 @@ func startEtcdOrProxyV2(args []string) {
 
 // startEtcd runs StartEtcd in addition to hooks needed for standalone etcd.
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
+	// 启动etcd
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	// 注册中断句柄，将e.Close 加入切片中（切片类型是函数回调）
 	osutil.RegisterInterruptHandler(e.Close)
 	select {
 	case <-e.Server.ReadyNotify(): // wait for e.Server to join the cluster
