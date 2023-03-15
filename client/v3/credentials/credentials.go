@@ -125,6 +125,7 @@ func (b *bundle) UpdateAuthToken(token string) {
 }
 
 func (rc *perRPCCredential) UpdateAuthToken(token string) {
+	// 同步锁定，更新token
 	rc.authTokenMu.Lock()
 	rc.authToken = token
 	rc.authTokenMu.Unlock()

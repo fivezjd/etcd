@@ -7773,6 +7773,7 @@ func (c *authClient) AuthStatus(ctx context.Context, in *AuthStatusRequest, opts
 
 func (c *authClient) Authenticate(ctx context.Context, in *AuthenticateRequest, opts ...grpc.CallOption) (*AuthenticateResponse, error) {
 	out := new(AuthenticateResponse)
+	// 远程调用生成token
 	err := c.cc.Invoke(ctx, "/etcdserverpb.Auth/Authenticate", in, out, opts...)
 	if err != nil {
 		return nil, err

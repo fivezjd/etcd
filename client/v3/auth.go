@@ -132,6 +132,7 @@ func NewAuthFromAuthClient(remote pb.AuthClient, c *Client) Auth {
 	return api
 }
 
+// 从服务端获取token
 func (auth *authClient) Authenticate(ctx context.Context, name string, password string) (*AuthenticateResponse, error) {
 	resp, err := auth.remote.Authenticate(ctx, &pb.AuthenticateRequest{Name: name, Password: password}, auth.callOpts...)
 	return (*AuthenticateResponse)(resp), toErr(ctx, err)

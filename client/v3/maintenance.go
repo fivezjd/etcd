@@ -114,6 +114,7 @@ func NewMaintenance(c *Client) Maintenance {
 	api := &maintenance{
 		lg: c.lg,
 		dial: func(endpoint string) (pb.MaintenanceClient, func(), error) {
+			// 连接服务器
 			conn, err := c.Dial(endpoint)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to dial endpoint %s with maintenance client: %v", endpoint, err)

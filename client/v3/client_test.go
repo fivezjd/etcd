@@ -37,6 +37,23 @@ func NewClient(t *testing.T, cfg Config) (*Client, error) {
 	return New(cfg)
 }
 
+func TestNew(t *testing.T) {
+	// 获取指定key的值
+	client, _ := New(Config{
+		Endpoints:   []string{"127.0.0.1:2379"},
+		DialTimeout: time.Second * 10,
+		Username:    "alice",
+		Password:    "alice",
+	})
+	get, err := client.KV.Get(context.TODO(), "hello")
+	if err != nil {
+		return
+	}
+	for i, value := range get.Kvs {
+		fmt.Println(i, value)
+	}
+}
+
 func TestDialCancel(t *testing.T) {
 	testutil.RegisterLeakDetection(t)
 

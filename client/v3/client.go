@@ -27,14 +27,14 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	"go.etcd.io/etcd/client/v3/credentials"
+	"go.etcd.io/etcd/client/v3/internal/endpoint"
+	"go.etcd.io/etcd/client/v3/internal/resolver"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpccredentials "google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
-	"zjd/v3/internal/endpoint"
-	"zjd/v3/internal/resolver"
 )
 
 var (
@@ -272,6 +272,7 @@ func (c *Client) getToken(ctx context.Context) error {
 		}
 		return err
 	}
+	// 更新token
 	c.authTokenBundle.UpdateAuthToken(resp.Token)
 	return nil
 }
@@ -390,6 +391,7 @@ func newClient(cfg *Config) (*Client, error) {
 		client.Password = cfg.Password
 		client.authTokenBundle = credentials.NewBundle(credentials.Config{})
 	}
+
 	if cfg.MaxCallSendMsgSize > 0 || cfg.MaxCallRecvMsgSize > 0 {
 		if cfg.MaxCallRecvMsgSize > 0 && cfg.MaxCallSendMsgSize > cfg.MaxCallRecvMsgSize {
 			return nil, fmt.Errorf("gRPC message recv limit (%d bytes) must be greater than send limit (%d bytes)", cfg.MaxCallRecvMsgSize, cfg.MaxCallSendMsgSize)
@@ -440,6 +442,7 @@ func newClient(cfg *Config) (*Client, error) {
 	if client.cfg.DialTimeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, client.cfg.DialTimeout)
 	}
+	// 获取token
 	err = client.getToken(ctx)
 	if err != nil {
 		client.Close()
